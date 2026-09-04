@@ -49,17 +49,28 @@
 </template>
 
 <script setup>
+// 响应式 API：ref 用于基础类型响应式，nextTick 用于 DOM 更新后执行回调
 import { ref, nextTick } from 'vue'
+// marked：Markdown 解析器
 import { marked } from 'marked'
+// highlight.js：代码块语法高亮
 import hljs from 'highlight.js'
+// highlight.js 默认主题（GitHub 风格）
 import 'highlight.js/styles/github.css'
+// DOMPurify：XSS 防护，净化 HTML
 import DOMPurify from 'dompurify'
+// 封装的 SSE 流式对话接口
 import { sendStreamChat } from '@/api/AncientChat'
 
+// 用户输入框内容
 const userInput = ref('')
+// 对话消息列表：{ role: 'user' | 'assistant', content: string, id: number }
 const messages = ref([])
+// 当前会话 ID，后端返回后用于多轮对话
 const conversationId = ref('')
+// 请求中加载状态，控制按钮 loading 和骨架屏显示
 const loading = ref(false)
+// 聊天历史区域 DOM 引用，用于滚动到底部
 const chatHistoryRef = ref(null)
 
 // 配置 marked（局部配置，避免全局污染）
@@ -70,7 +81,8 @@ const markedOptions = {
     }
     return hljs.highlightAuto(code).value
   },
-  breaks: true
+  breaks: true,
+  gfm: true
 }
 
 const renderMarkdown = (text) => {
@@ -79,6 +91,7 @@ const renderMarkdown = (text) => {
   return DOMPurify.sanitize(rawHtml)
 }
 
+// 滚动聊天历史区域到底部（流式更新时调用）
 const scrollToBottom = () => {
   nextTick(() => {
     if (chatHistoryRef.value) {
@@ -87,15 +100,22 @@ const scrollToBottom = () => {
   })
 }
 
+// 回车发送：Enter 提交，Shift+Enter 换行
 const handleEnter = (e) => {
   if (!e.shiftKey) {
     sendChat()
   }
 }
 
-const sendChat = () => {
+const sendChat = async () => {
+  // 防重复请求：loading 为 true 时直接拦截
+  if (loading.value) return
+
   const query = userInput.value.trim()
-  if (!query || loading.value) return
+  if (!query) return
+
+  // 标记 AI 消息是否已收到内容（用于错误时差异化提示）
+  let aiMsgStarted = false
 
   // 添加用户消息，绑定唯一 key
   messages.value.push({ role: 'user', content: query, id: Date.now() })
@@ -107,52 +127,64 @@ const sendChat = () => {
   const aiMsg = { role: 'assistant', content: '', id: Date.now() + 1 }
   messages.value.push(aiMsg)
 
-  // 使用封装的 API 建立 SSE 连接
-  const eventSource = sendStreamChat(query, conversationId.value)
+  try {
+    // 建立 SSE 连接
+    const eventSource = sendStreamChat(query, conversationId.value)
 
-  eventSource.onmessage = (event) => {
-    // ✅ 修正：将 data 提取到 try 外部，避免 catch 块作用域错误
-    const data = event.data
+    eventSource.onmessage = (event) => {
+      const data = event.data
 
-    if (data === '[DONE]') {
+      if (data === '[DONE]') {
+        eventSource.close()
+        aiMsgStarted = true
+        return
+      }
+
+      try {
+        const json = JSON.parse(data)
+
+        // Coze 格式：{"event":"conversation.message.delta","data":{"content":"..."}}
+        if (json.event === 'conversation.message.delta' && json.data?.content) {
+          aiMsg.content += json.data.content
+          aiMsgStarted = true
+          scrollToBottom()
+        }
+
+        // 提取 conversation_id，用于多轮对话
+        if (json.data?.conversation_id) {
+          conversationId.value = json.data.conversation_id
+        }
+      } catch {
+        // 非 JSON 数据直接追加显示
+        if (data && data !== '[DONE]') {
+          aiMsg.content += data
+          aiMsgStarted = true
+          scrollToBottom()
+        }
+      }
+    }
+
+    eventSource.onerror = (err) => {
+      console.error('SSE error', err)
       eventSource.close()
-      loading.value = false
-      return
-    }
-
-    try {
-      const json = JSON.parse(data)
-
-      // ✅ 修正：适配 Coze SSE 实际返回格式
-      // Coze 格式：{"event":"conversation.message.delta","data":{"content":"..."}}
-      if (json.event === 'conversation.message.delta' && json.data?.content) {
-        aiMsg.content += json.data.content
-        scrollToBottom()
-      }
-
-      // ✅ 修正：提取 conversation_id（可能在 conversation.chat.created 或任意事件中）
-      if (json.data?.conversation_id) {
-        conversationId.value = json.data.conversation_id
-      }
-    } catch (e) {
-      // 非 JSON 数据直接追加显示
-      if (data && data !== '[DONE]') {
-        aiMsg.content += data
-        scrollToBottom()
+      // 连接异常且尚未收到任何内容时，给出明确提示
+      if (!aiMsgStarted) {
+        aiMsg.content = '❌ 连接异常，请检查后端服务是否正常'
       }
     }
-  }
-
-  eventSource.onerror = (err) => {
-    console.error('SSE error', err)
-    eventSource.close()
+  } catch (error) {
+    // SSE 建立阶段抛出的同步异常
+    console.error('发送失败', error)
+    if (!aiMsgStarted) {
+      aiMsg.content = '❌ 发送失败，请重试'
+    }
+  } finally {
+    // 无论成功或失败，统一在此重置 loading，避免状态残留
     loading.value = false
-    if (!aiMsg.content) {
-      aiMsg.content = '❌ 连接异常，请检查后端服务是否正常'
-    }
   }
 }
 
+// 清空当前对话：重置消息列表和会话 ID
 const clearChat = () => {
   messages.value = []
   conversationId.value = ''
