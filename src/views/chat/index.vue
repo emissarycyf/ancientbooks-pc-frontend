@@ -29,7 +29,7 @@
           v-model="userInput"
           type="textarea"
           :rows="3"
-          placeholder="粘贴古籍文本或输入问题，例如：翻译《论语》学而篇第一段"
+          placeholder="粘贴古籍文本或输入问题，例如：讲解《道德经》第一篇"
           @keydown.enter.prevent="handleEnter"
         />
         <el-button
