@@ -25,11 +25,18 @@
       </div>
 
       <div class="input-area">
+        <!-- 示例提示，点击可复制到输入框 -->
+        <div class="example-hint">
+          <el-tag size="small" type="info" effect="plain" @click="fillExample('讲解《道德经》第一篇')" style="cursor: pointer;">
+            示例：讲解《道德经》第一篇
+          </el-tag>
+        </div>
+
         <el-input
           v-model="userInput"
           type="textarea"
           :rows="3"
-          placeholder="粘贴古籍文本或输入问题，例如：讲解《道德经》第一篇"
+          placeholder="粘贴古籍文本或输入问题，点击上方示例可快速填充"
           @keydown.enter.prevent="handleEnter"
         />
         <el-button
@@ -105,6 +112,11 @@ const handleEnter = (e) => {
   if (!e.shiftKey) {
     sendChat()
   }
+}
+
+// 点击示例标签，将示例文本填入输入框
+const fillExample = (text) => {
+  userInput.value = text
 }
 
 const sendChat = async () => {
@@ -294,5 +306,9 @@ const clearChat = () => {
 .input-area {
   padding-top: 8px;
   border-top: 1px solid #e4e7ed;
+}
+
+.example-hint {
+  margin-bottom: 8px;
 }
 </style>
