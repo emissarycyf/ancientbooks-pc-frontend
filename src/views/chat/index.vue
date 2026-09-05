@@ -4,30 +4,32 @@
       <template #header>
         <div class="card-header">
           <span>📜 古籍文献分析 Agent</span>
-          <el-tag v-if="conversationId" type="success" size="small">会话中</el-tag>
         </div>
       </template>
 
-      <div class="chat-history" ref="chatHistoryRef">
-        <div v-for="(msg, index) in messages" :key="msg.id" :class="['msg-item', msg.role]">
-          <div class="msg-avatar">{{ msg.role === 'user' ? '🧑' : '📚' }}</div>
-          <div class="msg-content">
-            <div v-if="msg.role === 'user'" class="user-text">{{ msg.content }}</div>
-            <div v-else class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+      <!-- 分析结果展示 -->
+      <div v-if="analysisResult" class="analysis-result">
+        <!-- 思考过程（reasoning_content），与正文不同时才单独展示 -->
+        <div v-if="analysisResult.reasoning && analysisResult.reasoning.trim() !== analysisResult.analysis?.trim()" class="reasoning-box">
+          <div class="reasoning-header">
+            <span class="reasoning-icon">🧠</span>
+            <span class="reasoning-label">思考过程</span>
           </div>
+          <div class="reasoning-content markdown-body" v-html="renderMarkdown(analysisResult.reasoning)"></div>
         </div>
-        <div v-if="loading" class="msg-item assistant">
-          <div class="msg-avatar">📚</div>
-          <div class="msg-content">
-            <el-skeleton :rows="3" animated />
-          </div>
-        </div>
+
+        <!-- 深度解读（answer content） -->
+        <el-card class="result-card">
+          <template #header>📚 深度解读</template>
+          <div class="markdown-body" v-html="renderMarkdown(analysisResult.analysis || '暂无')"></div>
+        </el-card>
       </div>
 
+      <!-- 输入区域 -->
       <div class="input-area">
         <!-- 示例提示，点击可复制到输入框 -->
         <div class="example-hint">
-          <el-tag size="small" type="info" effect="plain" @click="fillExample('讲解《道德经》第一篇')" style="cursor: pointer;">
+          <el-tag size="small" type="info" effect="plain" @click="userInput = '讲解《道德经》第一篇'" style="cursor: pointer;">
             示例：讲解《道德经》第一篇
           </el-tag>
         </div>
@@ -35,20 +37,20 @@
         <el-input
           v-model="userInput"
           type="textarea"
-          :rows="6"
-          placeholder="粘贴古籍文本或输入问题，点击上方示例可快速填充"
+          :rows="analysisResult?.analysis ? 3 : 6"
+          placeholder="输入古籍名称或内容，如：讲解《道德经》第一篇"
           @keydown.enter.prevent="handleEnter"
         />
         <el-button
           type="primary"
           :loading="loading"
-          @click="sendChat"
+          @click="handleSubmit"
           style="margin-top: 12px"
         >
           {{ loading ? '分析中...' : '提交分析' }}
         </el-button>
-        <el-button @click="clearChat" style="margin-top: 12px; margin-left: 8px">
-          清空对话
+        <el-button @click="clearResult" style="margin-top: 12px; margin-left: 8px">
+          清空结果
         </el-button>
       </div>
     </el-card>
@@ -56,31 +58,31 @@
 </template>
 
 <script setup>
-// 响应式 API：ref 用于基础类型响应式，nextTick 用于 DOM 更新后执行回调
-import { ref, nextTick } from 'vue'
-// marked：Markdown 解析器
+// 响应式 API
+import { ref } from 'vue'
+// Markdown 解析
 import { marked } from 'marked'
-// highlight.js：代码块语法高亮
+// 代码块语法高亮
 import hljs from 'highlight.js'
-// highlight.js 默认主题（GitHub 风格）
 import 'highlight.js/styles/github.css'
-// DOMPurify：XSS 防护，净化 HTML
+// XSS 防护
 import DOMPurify from 'dompurify'
-// 封装的 SSE 流式对话接口
-import { sendStreamChat } from '@/api/AncientChat'
+// 古籍流式分析接口（SSE）
+import { analyzeStream } from '@/api/agentApi'
+// Element Plus 消息提示
+import { ElMessage } from 'element-plus'
+// 用户状态管理
+import { useUserStore } from '@/stores/userStore'
 
-// 用户输入框内容
+const userStore = useUserStore()
+// 用户输入内容
 const userInput = ref('')
-// 对话消息列表：{ role: 'user' | 'assistant', content: string, id: number }
-const messages = ref([])
-// 当前会话 ID，后端返回后用于多轮对话
-const conversationId = ref('')
-// 请求中加载状态，控制按钮 loading 和骨架屏显示
+// 加载状态
 const loading = ref(false)
-// 聊天历史区域 DOM 引用，用于滚动到底部
-const chatHistoryRef = ref(null)
+// 分析结果（流式实时更新）
+const analysisResult = ref(null)
 
-// 配置 marked（局部配置，避免全局污染）
+// marked 配置
 const markedOptions = {
   highlight: (code, lang) => {
     if (lang && hljs.getLanguage(lang)) {
@@ -92,230 +94,174 @@ const markedOptions = {
   gfm: true
 }
 
+// Markdown 渲染并净化 XSS
 const renderMarkdown = (text) => {
   const rawHtml = marked.parse(text || '', markedOptions)
-  // XSS 防护：净化 HTML
   return DOMPurify.sanitize(rawHtml)
 }
 
-// 滚动聊天历史区域到底部（流式更新时调用）
-const scrollToBottom = () => {
-  nextTick(() => {
-    if (chatHistoryRef.value) {
-      chatHistoryRef.value.scrollTop = chatHistoryRef.value.scrollHeight
-    }
-  })
-}
-
-// 回车发送：Enter 提交，Shift+Enter 换行
+// 回车提交：Enter 提交，Shift+Enter 换行
 const handleEnter = (e) => {
   if (!e.shiftKey) {
-    sendChat()
+    handleSubmit()
   }
 }
 
-// 点击示例标签，将示例文本填入输入框
-const fillExample = (text) => {
-  userInput.value = text
-}
-
-const sendChat = async () => {
-  // 防重复请求：loading 为 true 时直接拦截
+// 提交分析（流式 SSE）
+const handleSubmit = async () => {
   if (loading.value) return
 
-  const query = userInput.value.trim()
-  if (!query) return
+  const text = userInput.value.trim()
+  if (!text) {
+    ElMessage.warning('请输入古籍内容或问题')
+    return
+  }
 
-  // 标记 AI 消息是否已收到内容（用于错误时差异化提示）
-  let aiMsgStarted = false
-
-  // 添加用户消息，绑定唯一 key
-  messages.value.push({ role: 'user', content: query, id: Date.now() })
-  userInput.value = ''
   loading.value = true
-  scrollToBottom()
+  userInput.value = ''
+  // 重置分析结果，准备接收流式数据
+  analysisResult.value = { reasoning: '', analysis: '' }
 
-  // 创建 AI 消息占位
-  const aiMsg = { role: 'assistant', content: '', id: Date.now() + 1 }
-  messages.value.push(aiMsg)
+  // 建立 SSE 流式连接
+  let eventSource = null
 
   try {
-    // 建立 SSE 连接
-    const eventSource = sendStreamChat(query, conversationId.value)
+    eventSource = analyzeStream({
+      content: text,
+      userId: userStore.userInfo?.userId || 'admin'
+    })
 
+    // 监听 SSE 消息（Coze 工作流格式）
     eventSource.onmessage = (event) => {
-      const data = event.data
-
-      if (data === '[DONE]') {
+      // 流结束标记
+      if (event.data === '[DONE]') {
         eventSource.close()
-        aiMsgStarted = true
         return
       }
 
+      // 解析 Coze SSE 数据
       try {
-        const json = JSON.parse(data)
+        const json = JSON.parse(event.data)
 
-        // Coze 格式：{"event":"conversation.message.delta","data":{"content":"..."}}
-        if (json.event === 'conversation.message.delta' && json.data?.content) {
-          aiMsg.content += json.data.content
-          aiMsgStarted = true
-          scrollToBottom()
+        // 主回答内容（type: "answer"），追加到下方深度解读
+        if (json.type === 'answer' && json.content) {
+          analysisResult.value.analysis += json.content
         }
 
-        // 提取 conversation_id，用于多轮对话
-        if (json.data?.conversation_id) {
-          conversationId.value = json.data.conversation_id
+        // 推理过程（reasoning_content），追加到上方思考框
+        if (json.reasoning_content) {
+          analysisResult.value.reasoning += json.reasoning_content
         }
       } catch {
-        // 非 JSON 数据直接追加显示
-        if (data && data !== '[DONE]') {
-          aiMsg.content += data
-          aiMsgStarted = true
-          scrollToBottom()
+        // 非 JSON 格式（保底处理）
+        if (event.data && event.data !== '[DONE]') {
+          analysisResult.value.analysis += event.data
         }
       }
     }
 
-    eventSource.onerror = (err) => {
-      console.error('SSE error', err)
+    // 监听连接错误
+    eventSource.onerror = () => {
       eventSource.close()
-      // 连接异常且尚未收到任何内容时，给出明确提示
-      if (!aiMsgStarted) {
-        aiMsg.content = '❌ 连接异常，请检查后端服务是否正常'
-      }
+      ElMessage.error('连接异常，请检查网络或刷新页面')
     }
   } catch (error) {
-    // SSE 建立阶段抛出的同步异常
-    console.error('发送失败', error)
-    if (!aiMsgStarted) {
-      aiMsg.content = '❌ 发送失败，请重试'
-    }
+    console.error('分析失败', error)
+    ElMessage.error('分析失败，请重试')
   } finally {
-    // 无论成功或失败，统一在此重置 loading，避免状态残留
     loading.value = false
   }
 }
 
-// 清空当前对话：重置消息列表和会话 ID
-const clearChat = () => {
-  messages.value = []
-  conversationId.value = ''
+// 清空结果
+const clearResult = () => {
+  analysisResult.value = null
+  userInput.value = ''
 }
 </script>
 
 <style scoped>
 .chat-container {
-  width: 90%;
-  max-width: 1000px;
-  margin: 0 auto;
-  min-height: 100vh;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 40px 0 60px;
-  box-sizing: border-box;
+  padding: 20px;
 }
-
 .chat-card {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100vh - 100px);
-  box-sizing: border-box;
+  max-width: 900px;
+  margin: 0 auto;
 }
-
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 18px;
-  font-weight: bold;
 }
-
-.chat-history {
-  flex: 1;
-  min-height: 300px;
+.analysis-result {
+  max-height: calc(100vh - 320px);
   overflow-y: auto;
-  padding: 16px;
-  background: #f5f7fa;
-  border-radius: 8px;
+  padding-right: 8px;
   margin-bottom: 16px;
 }
-
-.msg-item {
-  display: flex;
+.result-card {
   margin-bottom: 16px;
-  gap: 12px;
 }
-
-.msg-item.user {
-  flex-direction: row-reverse;
-}
-
-.msg-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  flex-shrink: 0;
-}
-
-.msg-content {
-  max-width: 80%;
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-}
-
-.msg-item.user .msg-content {
-  background: #409eff;
-  color: #fff;
-}
-
-.user-text {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .markdown-body {
   line-height: 1.8;
+  color: #333;
 }
-
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3) {
-  margin-top: 16px;
-  margin-bottom: 12px;
-  color: #303133;
-}
-
-.markdown-body :deep(p) {
-  margin-bottom: 8px;
-}
-
-.markdown-body :deep(code) {
-  background: #f0f0f0;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: monospace;
-}
-
 .markdown-body :deep(pre) {
-  background: #f6f8fa;
+  background: #f5f5f5;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: 4px;
   overflow-x: auto;
 }
-
-.input-area {
-  padding-top: 8px;
-  border-top: 1px solid #e4e7ed;
+.markdown-body :deep(code) {
+  font-family: 'Courier New', monospace;
 }
-
+.markdown-body :deep(blockquote) {
+  border-left: 4px solid #409eff;
+  padding-left: 12px;
+  color: #666;
+  margin: 8px 0;
+}
+/* 思考过程框 */
+.reasoning-box {
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fafafa;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  background: #f0f0f0;
+  font-weight: 500;
+  font-size: 0.85em;
+}
+.reasoning-icon {
+  font-size: 1.1em;
+}
+.reasoning-label {
+  color: #666;
+}
+.reasoning-content {
+  font-size: 0.85em;
+  max-height: 16vh;
+  overflow-y: auto;
+  padding: 8px 12px;
+  line-height: 1.6;
+  color: #555;
+}
+.reasoning-content :deep(pre) {
+  font-size: 0.9em;
+}
+.reasoning-content :deep(code) {
+  font-size: 0.9em;
+}
+.input-area {
+  margin-top: 16px;
+}
 .example-hint {
   margin-bottom: 8px;
 }
