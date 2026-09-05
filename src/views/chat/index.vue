@@ -35,7 +35,7 @@
         <el-input
           v-model="userInput"
           type="textarea"
-          :rows="3"
+          :rows="6"
           placeholder="粘贴古籍文本或输入问题，点击上方示例可快速填充"
           @keydown.enter.prevent="handleEnter"
         />
@@ -207,13 +207,21 @@ const clearChat = () => {
 .chat-container {
   width: 90%;
   max-width: 1000px;
-  margin: 30px auto;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 0 60px;
+  box-sizing: border-box;
 }
 
 .chat-card {
-  min-height: 80vh;
+  width: 100%;
   display: flex;
   flex-direction: column;
+  min-height: calc(100vh - 100px);
+  box-sizing: border-box;
 }
 
 .card-header {
@@ -226,7 +234,7 @@ const clearChat = () => {
 
 .chat-history {
   flex: 1;
-  max-height: 60vh;
+  min-height: 300px;
   overflow-y: auto;
   padding: 16px;
   background: #f5f7fa;
