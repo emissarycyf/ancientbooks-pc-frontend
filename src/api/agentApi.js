@@ -16,7 +16,9 @@ import request from '@/utils/request'
 export const analyzeStream = (params) => {
   const { content, userId = '' } = params
   const baseUrl = import.meta.env.VITE_API_BASE_URL
-  const url = `${baseUrl}/agent/analyze/stream?content=${encodeURIComponent(content)}&userId=${encodeURIComponent(userId)}`
+  // EventSource 无法携带自定义请求头，Token 通过 URL query 参数传递
+  const token = localStorage.getItem('token') || ''
+  const url = `${baseUrl}/agent/analyze/stream?content=${encodeURIComponent(content)}&userId=${encodeURIComponent(userId)}&token=${encodeURIComponent(token)}`
   return new EventSource(url)
 }
 
