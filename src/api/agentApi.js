@@ -15,8 +15,9 @@ import request from '@/utils/request'
  */
 export const analyzeStream = (params) => {
   const { content, userId = '' } = params
+  const token = localStorage.getItem('token') || ''
   const baseUrl = import.meta.env.VITE_API_BASE_URL
-  const url = `${baseUrl}/agent/analyze/stream?content=${encodeURIComponent(content)}&userId=${encodeURIComponent(userId)}`
+  const url = `${baseUrl}/agent/analyze/stream?content=${encodeURIComponent(content)}&userId=${encodeURIComponent(userId)}&token=${encodeURIComponent(token)}`
   return new EventSource(url)
 }
 
@@ -29,7 +30,7 @@ export const analyzeStream = (params) => {
  *
  * @example
  * const res = await getConversationId('user123')
- * // res.data => "abc123def456ghi789xyz"
+ * // res.data => "abc123defdef456ghi789xyz"
  */
 export const getConversationId = (userId) => {
   return request.get(`/agent/conversation/${userId}`)

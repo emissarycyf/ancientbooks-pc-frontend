@@ -24,7 +24,9 @@ export const useUserStore = defineStore('user', () => {
    * @param {string} password - 密码
    */
   const login = async (username, password) => {
+    console.log('[userStore] login start', { username })
     const res = await loginApi({ username, password })
+    console.log('[userStore] login response', res)
     // 后端返回格式：{ code: 200, msg: 'success', data: { token, userId, username, role } }
     if (res.code === 200 && res.data?.token) {
       const { token: newToken, userId, username: name, role } = res.data
@@ -34,6 +36,7 @@ export const useUserStore = defineStore('user', () => {
       // 持久化用户信息
       userInfo.value = { userId, username: name, role }
       localStorage.setItem('userInfo', JSON.stringify(userInfo.value))
+      console.log('[userStore] login done, token stored')
       return res.data
     }
     throw new Error(res.msg || '登录失败')
